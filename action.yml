@@ -1,24 +1,39 @@
-name: The name of your action here
-description: Provide a description here
-author: Your name or organization here
+name: Setup Anvil
+description:
+  Set up Anvil and install provider dependencies from its config files
+author: JSChronicles
 
-# Add your action's branding here. This will appear on the GitHub Marketplace.
 branding:
-  icon: heart
-  color: red
+  icon: terminal
+  color: gray-dark
 
-# Define your inputs here.
 inputs:
-  milliseconds:
-    description: Your input description here
-    required: true
-    default: '1000'
+  anvil-version:
+    description: Exact Anvil version to install, or "latest"
+    required: false
+    default: '0.31.0'
+  python-version:
+    description: Optional Python version override for the isolated Anvil runtime
+    required: false
+    default: ''
 
-# Define your outputs here.
 outputs:
-  time:
-    description: Your output description here
+  anvil-version:
+    description: The exact installed Anvil version
+    value: ${{ steps.setup-anvil.outputs.anvil-version }}
 
 runs:
-  using: node24
-  main: dist/index.js
+  using: composite
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      with:
+        version: '0.12.3'
+        enable-cache: false
+
+    - name: Set up Anvil
+      id: setup-anvil
+      uses: $/dist/setup
+      with:
+        anvil-version: ${{ inputs.anvil-version }}
+        python-version: ${{ inputs.python-version }}

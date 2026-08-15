@@ -1,66 +1,69 @@
 {
-  "name": "typescript-action",
-  "description": "GitHub Actions TypeScript template",
-  "version": "0.0.0",
-  "author": "",
+  "name": "setup-anvil",
+  "description": "Set up Anvil in GitHub Actions with automatic provider dependencies",
+  "version": "1.0.0",
+  "author": "JSChronicles",
   "type": "module",
   "private": true,
-  "homepage": "https://github.com/actions/typescript-action",
+  "homepage": "https://github.com/JSChronicles/setup-anvil",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/actions/typescript-action.git"
+    "url": "git+https://github.com/JSChronicles/setup-anvil.git"
   },
   "bugs": {
-    "url": "https://github.com/actions/typescript-action/issues"
+    "url": "https://github.com/JSChronicles/setup-anvil/issues"
   },
   "keywords": [
-    "actions"
+    "actions",
+    "anvil",
+    "github-actions"
   ],
   "exports": {
-    ".": "./dist/index.js"
+    "./setup": "./dist/setup/index.js",
+    "./shim": "./dist/shim/index.js"
   },
   "engines": {
     "node": ">=24.0.0"
   },
   "scripts": {
-    "bundle": "npm run format:write && npm run package",
-    "ci-test": "NODE_OPTIONS=--experimental-vm-modules NODE_NO_WARNINGS=1 npx jest",
-    "coverage": "npx make-coverage-badge --output-path ./badges/coverage.svg",
-    "format:write": "npx prettier --write .",
-    "format:check": "npx prettier --check .",
-    "lint": "npx eslint .",
-    "local-action": "npx @github/local-action . src/main.ts .env",
-    "package": "npx rimraf ./dist && npx rollup --config rollup.config.ts --configPlugin @rollup/plugin-typescript",
-    "package:watch": "npm run package -- --watch",
-    "test": "NODE_OPTIONS=--experimental-vm-modules NODE_NO_WARNINGS=1 npx jest",
-    "all": "npm run format:write && npm run lint && npm run test && npm run coverage && npm run package"
+    "build": "rollup --config rollup.config.ts --configPlugin @rollup/plugin-typescript",
+    "bundle": "npm run format:write && npm run build",
+    "ci-test": "NODE_OPTIONS=--experimental-vm-modules NODE_NO_WARNINGS=1 jest",
+    "format:write": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "package": "npm run build",
+    "package:watch": "npm run build -- --watch",
+    "test": "NODE_OPTIONS=--experimental-vm-modules NODE_NO_WARNINGS=1 jest",
+    "typecheck": "tsc --noEmit",
+    "all": "npm run format:write && npm run lint && npm run typecheck && npm run test && npm run build"
   },
   "license": "MIT",
   "dependencies": {
-    "@actions/core": "^3.0.0"
+    "@actions/core": "^3.0.0",
+    "yaml": "^2.8.1"
   },
   "devDependencies": {
     "@eslint/compat": "^2.0.2",
     "@eslint/eslintrc": "^3.3.3",
     "@eslint/js": "^10.0.1",
-    "@github/local-action": "^7.0.1",
     "@jest/globals": "^30.2.0",
     "@rollup/plugin-commonjs": "^29.0.0",
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@rollup/plugin-typescript": "^12.3.0",
     "@types/jest": "^30.0.0",
-    "@types/node": "^25.2.3",
+    "@types/node": "^24.10.0",
     "@typescript-eslint/eslint-plugin": "^8.56.0",
     "eslint": "^10.0.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-jest": "^29.15.0",
     "eslint-plugin-prettier": "^5.5.5",
     "jest": "^30.2.0",
-    "make-coverage-badge": "^1.2.0",
     "prettier": "^3.8.1",
     "rollup": "^4.57.1",
     "ts-jest": "^29.4.6",
     "ts-jest-resolver": "^2.0.1",
+    "tslib": "^2.8.1",
     "typescript": "^5.9.3"
   },
   "optionalDependencies": {

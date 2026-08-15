@@ -1,0 +1,19 @@
+name: Internal Anvil setup
+description: Internal Node.js setup implementation for setup-anvil
+
+inputs:
+  anvil-version:
+    description: Exact Anvil version to install, or "latest"
+    required: true
+  python-version:
+    description: Optional Python version override
+    required: false
+    default: ''
+
+outputs:
+  anvil-version:
+    description: The exact installed Anvil version
+
+runs:
+  using: node24
+  main: index.js
