@@ -3,6 +3,7 @@ import { constants } from 'node:fs'
 import {
   access,
   chmod,
+  mkdir,
   mkdtemp,
   readdir,
   realpath,
@@ -50,6 +51,15 @@ async function findExecutable(name: string): Promise<string> {
     }
   }
   throw new Error(`${name} is unavailable after setup`)
+}
+
+export async function writeLauncher(
+  launcher: string,
+  contents: string
+): Promise<void> {
+  await mkdir(dirname(launcher), { recursive: true })
+  await writeFile(launcher, contents, { encoding: 'utf8', mode: 0o755 })
+  await chmod(launcher, 0o755)
 }
 
 export async function run(): Promise<void> {
@@ -123,11 +133,7 @@ export async function run(): Promise<void> {
       `exec ${shellQuote(process.execPath)} ${shellQuote(shimBundle)} "$@"`,
       ''
     ].join('\n')
-    await writeFile(launcher, launcherContents, {
-      encoding: 'utf8',
-      mode: 0o755
-    })
-    await chmod(launcher, 0o755)
+    await writeLauncher(launcher, launcherContents)
 
     core.addPath(shimDirectory)
     core.setOutput('anvil-version', metadata.version)

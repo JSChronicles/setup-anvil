@@ -33,7 +33,7 @@ import require$$5$3 from 'string_decoder';
 import 'child_process';
 import 'timers';
 import { constants as constants$5 } from 'node:fs';
-import { mkdtemp, access as access$1, writeFile as writeFile$1, chmod as chmod$1, realpath, readdir as readdir$1, stat as stat$1 } from 'node:fs/promises';
+import { mkdtemp, access as access$1, realpath, readdir as readdir$1, stat as stat$1, mkdir as mkdir$1, writeFile as writeFile$1, chmod as chmod$1 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname, delimiter } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -28584,6 +28584,11 @@ async function findExecutable(name) {
     }
     throw new Error(`${name} is unavailable after setup`);
 }
+async function writeLauncher(launcher, contents) {
+    await mkdir$1(dirname(launcher), { recursive: true });
+    await writeFile$1(launcher, contents, { encoding: 'utf8', mode: 0o755 });
+    await chmod$1(launcher, 0o755);
+}
 async function run() {
     try {
         if (process.platform !== 'linux' && process.platform !== 'darwin') {
@@ -28641,11 +28646,7 @@ async function run() {
             `exec ${shellQuote(process.execPath)} ${shellQuote(shimBundle)} "$@"`,
             ''
         ].join('\n');
-        await writeFile$1(launcher, launcherContents, {
-            encoding: 'utf8',
-            mode: 0o755
-        });
-        await chmod$1(launcher, 0o755);
+        await writeLauncher(launcher, launcherContents);
         addPath(shimDirectory);
         setOutput('anvil-version', metadata.version);
         info(`Installed Anvil ${metadata.version}`);
