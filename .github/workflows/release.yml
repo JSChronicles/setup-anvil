@@ -19,7 +19,8 @@ jobs:
     name: Validate release metadata
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # Draft releases are only visible to tokens with push access.
+      contents: write
 
     steps:
       - name: Checkout
@@ -74,8 +75,8 @@ jobs:
             exit 1
           fi
 
-          release_json=$(gh release view "$tag" --json isDraft,targetCommitish,tagName 2>/dev/null) || {
-            echo "::error::Release Drafter has not created the $tag draft release."
+          release_json=$(gh release view "$tag" --json isDraft,targetCommitish,tagName) || {
+            echo "::error::Unable to read draft release $tag. Verify that it exists and this job has contents: write permission."
             exit 1
           }
           if [[ $(jq -r '.isDraft' <<<"$release_json") != 'true' ]]; then
