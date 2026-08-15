@@ -1,6 +1,7 @@
 name: Continuous Integration
 
 on:
+  workflow_call:
   pull_request:
     branches:
       - main
@@ -73,3 +74,4 @@ jobs:
         run: |
           test "$INSTALLED_VERSION" = "0.31.0"
           anvil list --tasks
+          anvil list --processors

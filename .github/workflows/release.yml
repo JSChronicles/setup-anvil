@@ -1,0 +1,209 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without a v prefix (for example, 0.1.0)
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  validate-release:
+    name: Validate release metadata
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate version, commit, tag, and draft
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          semver_identifier='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+          semver_pattern="^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-${semver_identifier}(\\.${semver_identifier})*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+          if [[ ! "$VERSION" =~ $semver_pattern ]]; then
+            echo "::error::Version must be valid Semantic Versioning without a v prefix (for example, 0.1.0)."
+            exit 1
+          fi
+
+          tag="v$VERSION"
+          package_version=$(jq -r '.version' package.json)
+          lock_version=$(jq -r '.version' package-lock.json)
+          lock_root_version=$(jq -r '.packages[""].version' package-lock.json)
+
+          if [[ "$package_version" != "$VERSION" ]]; then
+            echo "::error::package.json version ($package_version) does not match $VERSION."
+            exit 1
+          fi
+          if [[ "$lock_version" != "$VERSION" || "$lock_root_version" != "$VERSION" ]]; then
+            echo "::error::package-lock.json versions must both match $VERSION."
+            exit 1
+          fi
+
+          if [[ "$GITHUB_REF" != 'refs/heads/main' ]]; then
+            echo "::error::Release workflow must be dispatched from the main branch."
+            exit 1
+          fi
+          main_sha=$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq '.object.sha')
+          if [[ "$main_sha" != "$GITHUB_SHA" ]]; then
+            echo "::error::Workflow commit $GITHUB_SHA is not the current main commit $main_sha."
+            exit 1
+          fi
+
+          tag_count=$(gh api "repos/$GH_REPO/git/matching-refs/tags/$tag" |
+            jq --arg ref "refs/tags/$tag" '[.[] | select(.ref == $ref)] | length')
+          if [[ "$tag_count" != '0' ]]; then
+            echo "::error::Git tag $tag already exists. Exact release tags are never moved."
+            exit 1
+          fi
+
+          release_json=$(gh release view "$tag" --json isDraft,targetCommitish,tagName 2>/dev/null) || {
+            echo "::error::Release Drafter has not created the $tag draft release."
+            exit 1
+          }
+          if [[ $(jq -r '.isDraft' <<<"$release_json") != 'true' ]]; then
+            echo "::error::A published release for $tag already exists."
+            exit 1
+          fi
+          draft_target=$(jq -r '.targetCommitish' <<<"$release_json")
+          if [[ "$draft_target" != "$GITHUB_SHA" ]]; then
+            echo "::error::Draft $tag targets $draft_target instead of $GITHUB_SHA."
+            exit 1
+          fi
+
+  continuous-integration:
+    name: Continuous integration
+    needs: validate-release
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  check-dist:
+    name: Check bundled JavaScript
+    needs: validate-release
+    permissions:
+      contents: read
+    uses: ./.github/workflows/check-dist.yml
+
+  publish-release:
+    name: Approve and publish exact release
+    needs:
+      - continuous-integration
+      - check-dist
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+    permissions:
+      contents: write
+
+    steps:
+      - name: Publish exact release
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          semver_identifier='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+          semver_pattern="^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-${semver_identifier}(\\.${semver_identifier})*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+          if [[ ! "$VERSION" =~ $semver_pattern ]]; then
+            echo "::error::Invalid release version."
+            exit 1
+          fi
+
+          tag="v$VERSION"
+          release_json=$(gh release view "$tag" --json isDraft,targetCommitish 2>/dev/null) || {
+            echo "::error::Draft release $tag no longer exists."
+            exit 1
+          }
+          release_target=$(jq -r '.targetCommitish' <<<"$release_json")
+          if [[ "$release_target" != "$GITHUB_SHA" ]]; then
+            echo "::error::Release $tag targets $release_target instead of $GITHUB_SHA."
+            exit 1
+          fi
+
+          if [[ $(jq -r '.isDraft' <<<"$release_json") == 'true' ]]; then
+            version_without_build=${VERSION%%+*}
+            if [[ "$version_without_build" == *-* ]]; then
+              gh release edit "$tag" --draft=false --prerelease
+            else
+              gh release edit "$tag" --draft=false --latest
+            fi
+          else
+            tag_sha=$(gh api "repos/$GH_REPO/git/ref/tags/$tag" --jq '.object.sha')
+            if [[ "$tag_sha" != "$GITHUB_SHA" ]]; then
+              echo "::error::Published release $tag does not point to $GITHUB_SHA."
+              exit 1
+            fi
+            echo "Release $tag is already published at the intended commit; continuing."
+          fi
+
+  update-floating-tag:
+    name: Update floating v0 tag
+    needs: publish-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Create or update v0
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          semver_identifier='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+          semver_pattern="^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-${semver_identifier}(\\.${semver_identifier})*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+          if [[ ! "$VERSION" =~ $semver_pattern || "$VERSION" != 0.* ]]; then
+            echo "::error::The v0 compatibility tag can only be updated by a valid 0.x.y release."
+            exit 1
+          fi
+
+          version_without_build=${VERSION%%+*}
+          if [[ "$version_without_build" == *-* ]]; then
+            echo "Prerelease $VERSION does not update the stable v0 compatibility tag."
+            exit 0
+          fi
+
+          tag="v$VERSION"
+          target_sha=$(gh api "repos/$GH_REPO/git/ref/tags/$tag" --jq '.object.sha')
+          if [[ "$target_sha" != "$GITHUB_SHA" ]]; then
+            echo "::error::Exact tag $tag does not point to $GITHUB_SHA."
+            exit 1
+          fi
+
+          v0_count=$(gh api "repos/$GH_REPO/git/matching-refs/tags/v0" |
+            jq '[.[] | select(.ref == "refs/tags/v0")] | length')
+          if [[ "$v0_count" == '0' ]]; then
+            gh api --method POST "repos/$GH_REPO/git/refs" \
+              -f ref='refs/tags/v0' \
+              -f sha="$target_sha" >/dev/null
+            echo "Created v0 at $target_sha."
+          else
+            gh api --method PATCH "repos/$GH_REPO/git/refs/tags/v0" \
+              -f sha="$target_sha" \
+              -F force=true >/dev/null
+            echo "Updated v0 to $target_sha."
+          fi

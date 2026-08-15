@@ -1,26 +1,40 @@
 version: 2
 updates:
-  - package-ecosystem: github-actions
-    directory: /
+  - package-ecosystem: "github-actions"
+    directory: "/"
     schedule:
-      interval: weekly
+      interval: "monthly"
+      time: "08:00"
+      timezone: "America/Chicago"
+    cooldown:
+      default-days: 7
     groups:
-      actions-minor:
-        update-types:
-          - minor
-          - patch
+      github-actions:
+        applies-to: version-updates
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(github-actions)"
+    labels:
+      - "dependencies"
+      - "github-actions"
 
   - package-ecosystem: npm
-    directory: /
+    directory: "/"
     schedule:
-      interval: weekly
+      interval: "monthly"
+      time: "08:00"
+      timezone: "America/Chicago"
+    cooldown:
+      default-days: 14
     groups:
-      npm-development:
-        dependency-type: development
-        update-types:
-          - minor
-          - patch
-      npm-production:
-        dependency-type: production
-        update-types:
-          - patch
+      npm:
+        applies-to: version-updates
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(npm)"
+    labels:
+      - "dependencies"
+      - "npm"
+

@@ -15,10 +15,10 @@ permissions:
   contents: read
 
 steps:
-  - uses: actions/checkout@v6
+  - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
   - name: Set up Anvil
-    uses: JSChronicles/setup-anvil@v1
+    uses: JSChronicles/setup-anvil@v0
 
   - name: Run Anvil
     run: anvil run --config-file anvil.yaml
@@ -28,7 +28,7 @@ Multiple configuration files retain their supplied order:
 
 ```yaml
 - name: Set up Anvil
-  uses: JSChronicles/setup-anvil@v1
+  uses: JSChronicles/setup-anvil@v0
 
 - name: Run Anvil
   run: >
@@ -52,7 +52,7 @@ The default action release installs an exact, integration-tested Anvil version.
 Choose another exact version with `anvil-version`:
 
 ```yaml
-- uses: JSChronicles/setup-anvil@v1
+- uses: JSChronicles/setup-anvil@v0
   with:
     anvil-version: '0.31.0'
 ```
@@ -61,7 +61,7 @@ Use `latest` only when intentionally opting into a version that can change
 between otherwise identical workflow runs:
 
 ```yaml
-- uses: JSChronicles/setup-anvil@v1
+- uses: JSChronicles/setup-anvil@v0
   with:
     anvil-version: latest
 ```
@@ -72,7 +72,7 @@ uv normally selects and, when needed, downloads a compatible managed Python. An
 optional override is available for older Anvil releases or unusual runners:
 
 ```yaml
-- uses: JSChronicles/setup-anvil@v1
+- uses: JSChronicles/setup-anvil@v0
   with:
     anvil-version: '0.31.0'
     python-version: '3.14'
@@ -111,13 +111,13 @@ extra to be installed. Providers included in the base Anvil installation, such
 as AWS in Anvil 0.31.0, require no additional operation.
 
 Third-party provider plugin names cannot securely identify which external
-package should be installed. Such plugins are not automatically installed in
-version 1.
+package should be installed. Such plugins are not automatically installed during
+the pre-1.0 lifecycle.
 
 ## Platforms
 
-Version 1 supports GitHub-hosted and compatible self-hosted Linux and macOS
-runners. Windows is not currently supported because a `.cmd` launcher can
+The pre-1.0 releases support GitHub-hosted and compatible self-hosted Linux and
+macOS runners. Windows is not currently supported because a `.cmd` launcher can
 re-enter command parsing and weaken the exact argument and shell-injection
 guarantees.
 
@@ -141,6 +141,25 @@ is available on GitHub.com but not on GitHub Enterprise Server.
 
 For hardened workflows, pin this action and all other actions to full commit
 SHAs instead of floating major tags.
+
+## Release versioning
+
+Setup Anvil is currently pre-1.0. After the initial release is published, use
+`JSChronicles/setup-anvil@v0` for convenient updates that remain compatible
+within the pre-1.0 release line. The `v0` tag is intentionally movable and will
+not work until `v0.1.0` has actually been published.
+
+For a fixed semantic release, use `JSChronicles/setup-anvil@v0.1.0`. For the
+strongest supply-chain guarantee, pin the full commit SHA for that release:
+
+```yaml
+- uses: JSChronicles/setup-anvil@<full-release-commit-sha> # v0.1.0
+```
+
+Backwards-compatible fixes and features can update `v0`. Potentially breaking
+changes may be released as a new `0.x.0` version. Once the public interface and
+behavior are stable, the project will promote to `v1.0.0` and add a floating
+`v1` tag.
 
 ## Development
 
