@@ -144,10 +144,15 @@ SHAs instead of floating major tags.
 
 ## Release versioning
 
-Setup Anvil is currently pre-1.0. After the initial release is published, use
-`JSChronicles/setup-anvil@v0` for convenient updates that remain compatible
-within the pre-1.0 release line. The `v0` tag is intentionally movable and will
-not work until `v0.1.0` has actually been published.
+Setup Anvil is currently pre-1.0. Every change pushed to `main` is tested and
+the committed bundles are verified before semantic-release decides whether to
+publish a release. Conventional `feat` commits and breaking changes increment
+the minor version; `fix`, `perf`, `revert`, and dependency commits increment the
+patch version. Other commit types do not publish a release.
+
+Use `JSChronicles/setup-anvil@v0` for convenient updates that remain compatible
+within the pre-1.0 release line. The release workflow automatically moves this
+major-version tag after publishing each stable release.
 
 For a fixed semantic release, use `JSChronicles/setup-anvil@v0.1.0`. For the
 strongest supply-chain guarantee, pin the full commit SHA for that release:
