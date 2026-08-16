@@ -1,9 +1,11 @@
 # Setup Anvil
 
 Set up an isolated [Anvil](https://github.com/JSChronicles/anvil) CLI in GitHub
-Actions. When an Anvil command includes configuration files, this action
-discovers their stock providers and ensures the corresponding optional Anvil
-dependencies are installed before running the real CLI.
+Actions. The checked-out Python project is installed alongside Anvil, so its
+plugin providers, plugin tasks, and plugin processors work through Anvil's
+normal entry-point discovery. When an Anvil command includes configuration
+files, this action installs only the advertised optional dependencies matching
+the selected providers before running the real CLI.
 
 The workflow continues to use normal Anvil commands. There are no action inputs
 for commands, arguments, config files, or providers.
@@ -78,6 +80,85 @@ optional override is available for older Anvil releases or unusual runners:
     python-version: '3.14'
 ```
 
+## Python projects and plugins
+
+When `pyproject.toml` exists in `GITHUB_WORKSPACE` (or the safe current-working-
+directory fallback), the action installs that project by absolute filesystem
+path into Anvil's private environment. The `[project].name` can be changed; the
+action never hardcodes or uses it for a PyPI lookup.
+
+The base project is installed during Anvil's initial uv resolution. Anvil then
+discovers its standard entry points normally, including `anvil.providers.tasks`,
+provider-specific `anvil.providers.<provider>.tasks`, `anvil.processors`, and
+`anvil.provider_packages`. No task or processor catalog is required. Provider
+package roots are discovered from metadata without eagerly importing or
+constructing provider implementations.
+
+Here is a complete minimal project that contributes plugin tasks, plugin
+processors, and a Snowflake plugin provider supplied by an optional package:
+
+```toml
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "acme-security-anvil"
+version = "1.0.0"
+requires-python = ">=3.12"
+dependencies = [
+  "anvil==0.31.0",
+]
+
+[project.optional-dependencies]
+snowflake = [
+  "company-anvil-snowflake==2.4.1",
+]
+
+[project.entry-points."anvil.providers.tasks"]
+acme = "acme_security_anvil.tasks"
+
+[project.entry-points."anvil.providers.snowflake.tasks"]
+acme-snowflake = "acme_security_anvil.snowflake_tasks"
+
+[project.entry-points."anvil.processors"]
+acme = "acme_security_anvil.processors"
+
+[project.entry-points."anvil.provider_packages"]
+acme = "acme_security_anvil.providers"
+```
+
+With a configuration containing `targets[*].provider.name: snowflake`, the shim
+activates the local `snowflake` extra using the checkout's absolute path. That
+installs `company-anvil-snowflake==2.4.1`; the real Anvil process then discovers
+its provider through `anvil.provider_packages`.
+
+A complete workflow checks out the package before setup and invokes Anvil as
+usual:
+
+```yaml
+name: Anvil
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: JSChronicles/setup-anvil@v0
+        with:
+          anvil-version: '0.31.0'
+      - run: anvil validate --config-file anvil.yaml
+      - run: anvil run --config-file anvil.yaml
+```
+
+If no `pyproject.toml` is found, setup retains its stock-components-only
+behavior.
+
 ## How provider setup works
 
 The action installs Anvil into a private uv-managed environment. It places a
@@ -90,29 +171,39 @@ For an invocation containing `--config-file`, the shim:
 2. extracts config paths without changing or deduplicating them;
 3. safely reads only `targets[*].provider.name` from each YAML file;
 4. deduplicates provider names for dependency installation;
-5. derives available stock providers and extras from the installed Anvil
-   distribution;
-6. asks uv to ensure all required extras in one operation; and
+5. reads advertised extras from Anvil, the checked-out project distribution, and
+   applicable installed plugin distributions/packages;
+6. asks uv to ensure all matching extras in one serialized operation while
+   preserving Anvil's exact selected version; and
 7. invokes the real Anvil executable with the untouched original arguments.
 
 uv compares the combined requirement with the actual environment, so repeated
 commands do not require a separate provider-state file. Concurrent installation
 attempts are serialized with a private runtime lock.
 
-The shim does not implement config globbing, automatic discovery, Anvil command
-semantics, provider options, tasks, processors, validation, or execution. Anvil
-remains authoritative for those behaviors.
+The shim does not implement config globbing, Anvil command semantics, provider
+options, task or processor declarations, validation, or execution. It also does
+not parse YAML to select plugin tasks or plugin processors. Anvil remains
+authoritative for discovery and validation.
 
-## Supported providers
+## Provider dependency selection
 
-Automatic installation applies to stock providers shipped by the selected Anvil
-distribution. A stock provider with a same-named optional extra causes that
-extra to be installed. Providers included in the base Anvil installation, such
-as AWS in Anvil 0.31.0, require no additional operation.
+For stock components, a stock provider with a same-named Anvil extra activates
+that extra, such as `anvil[gcp]`. Providers included in base Anvil, such as AWS
+in Anvil 0.31.0, require no additional operation.
 
-Third-party provider plugin names cannot securely identify which external
-package should be installed. Such plugins are not automatically installed during
-the pre-1.0 lifecycle.
+For plugin providers, a provider name activates an extra only when the same
+normalized extra name is explicitly advertised by the checked-out project or an
+applicable installed plugin distribution/package. For example, `snowflake`
+activates the local path equivalent of `.[snowflake]`. Extras use Python
+packaging normalization, so hyphens, underscores, and dots compare consistently.
+Multiple and duplicate providers are resolved once in a single installation
+operation.
+
+Third-party distribution names are never guessed from provider names. If no
+advertised extra matches, the shim performs no speculative installation and
+delegates provider validation to Anvil, which produces the authoritative error
+if the plugin provider is still unavailable.
 
 ## Platforms
 
@@ -133,6 +224,10 @@ is available on GitHub.com but not on GitHub Enterprise Server.
   conversion, and config files have a 5 MiB inspection limit.
 - Consumer uv project configuration is ignored for the private environment.
 - Arbitrary provider names are never converted into external package names.
+- Local extras are interpolated only after confirmation from installed project
+  metadata, and use the checkout's absolute path.
+- Plugin distributions/packages and entry points are inspected as metadata;
+  plugin implementations are not imported or executed during setup discovery.
 - The real Anvil executable is invoked by absolute path, preventing shim
   recursion.
 - The action itself needs no GitHub token. Start with `contents: read` and add

@@ -33,7 +33,7 @@ import require$$5$3 from 'string_decoder';
 import 'child_process';
 import 'timers';
 import { constants as constants$5 } from 'node:fs';
-import { mkdtemp, access as access$1, realpath, readdir as readdir$1, stat as stat$1, mkdir as mkdir$1, writeFile as writeFile$1, chmod as chmod$1 } from 'node:fs/promises';
+import { mkdtemp, access as access$1, realpath, stat as stat$1, readdir as readdir$1, mkdir as mkdir$1, writeFile as writeFile$1, chmod as chmod$1 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname, delimiter } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -28497,20 +28497,63 @@ async function inheritProcess(executable, args, env = process.env) {
 const METADATA_SCRIPT = String.raw `
 import importlib.metadata
 import json
+import os
+import pathlib
+import sys
+import urllib.parse
 
 distribution = importlib.metadata.distribution("anvil")
 extras = sorted(set(distribution.metadata.get_all("Provides-Extra") or []))
-providers = set()
-for item in distribution.files or []:
-    parts = tuple(item.parts)
-    if len(parts) >= 4 and parts[:2] == ("anvil", "providers"):
-        provider = parts[2]
-        if provider not in {"base", "tasks", "__pycache__"}:
-            providers.add(provider)
+
+project_path = pathlib.Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else None
+project = None
+plugins = []
+for installed in importlib.metadata.distributions():
+    name = installed.metadata.get("Name")
+    if not name:
+        continue
+    installed_extras = sorted(set(installed.metadata.get_all("Provides-Extra") or []))
+
+    is_project = False
+    direct_url_text = installed.read_text("direct_url.json")
+    if project_path is not None and direct_url_text:
+        try:
+            direct_url = json.loads(direct_url_text).get("url", "")
+            parsed = urllib.parse.urlparse(direct_url)
+            if parsed.scheme == "file":
+                source_path = pathlib.Path(urllib.parse.unquote(parsed.path)).resolve()
+                is_project = os.path.normcase(source_path) == os.path.normcase(project_path)
+        except (json.JSONDecodeError, OSError, TypeError, ValueError):
+            pass
+    if is_project:
+        project = {"name": name, "extras": installed_extras}
+
+    providers = set()
+    has_provider_packages = False
+    for entry_point in installed.entry_points:
+        group = entry_point.group
+        if group == "anvil.provider_packages":
+            has_provider_packages = True
+            if entry_point.name:
+                providers.add(entry_point.name)
+        elif group.startswith("anvil.providers.") and group.endswith(".tasks"):
+            provider = group[len("anvil.providers."):-len(".tasks")]
+            if provider:
+                providers.add(provider)
+    if has_provider_packages:
+        providers.update(installed_extras)
+    if providers and not is_project and name.lower().replace("_", "-") != "anvil":
+        plugins.append({
+            "name": name,
+            "version": installed.version,
+            "extras": installed_extras,
+            "providers": sorted(providers),
+        })
 print(json.dumps({
     "version": distribution.version,
     "extras": extras,
-    "providers": sorted(providers),
+    "project": project,
+    "pluginDistributions": plugins,
 }))
 `.trim();
 function stringArray(value, field) {
@@ -28519,8 +28562,24 @@ function stringArray(value, field) {
     }
     return value;
 }
-async function readAnvilMetadata(python) {
-    const result = await captureProcess(python, ['-I', '-c', METADATA_SCRIPT]);
+function projectMetadata(value, field) {
+    if (typeof value !== 'object' || value === null) {
+        throw new Error(`Invalid Anvil metadata field: ${field}`);
+    }
+    const metadata = value;
+    if (typeof metadata.name !== 'string' || metadata.name === '') {
+        throw new Error(`Invalid Anvil metadata field: ${field}.name`);
+    }
+    return {
+        extras: stringArray(metadata.extras, `${field}.extras`),
+        name: metadata.name
+    };
+}
+async function readAnvilMetadata(python, projectPath) {
+    const args = ['-I', '-c', METADATA_SCRIPT];
+    if (projectPath)
+        args.push(projectPath);
+    const result = await captureProcess(python, args);
     if (result.exitCode !== 0) {
         throw new Error(`Unable to inspect the installed Anvil package: ${result.stderr.trim()}`);
     }
@@ -28540,9 +28599,28 @@ async function readAnvilMetadata(python) {
     if (typeof metadata.version !== 'string' || metadata.version === '') {
         throw new Error('Installed Anvil metadata does not include a version');
     }
+    const plugins = metadata.pluginDistributions;
+    if (!Array.isArray(plugins)) {
+        throw new Error('Invalid Anvil metadata field: pluginDistributions');
+    }
+    const project = metadata.project === null || metadata.project === undefined
+        ? undefined
+        : projectMetadata(metadata.project, 'project');
     return {
         extras: stringArray(metadata.extras, 'extras'),
-        providers: stringArray(metadata.providers, 'providers'),
+        pluginDistributions: plugins.map((plugin, index) => {
+            const parsed = projectMetadata(plugin, `pluginDistributions[${index}]`);
+            const value = plugin;
+            if (typeof value.version !== 'string' || value.version === '') {
+                throw new Error(`Invalid Anvil metadata field: pluginDistributions[${index}].version`);
+            }
+            return {
+                ...parsed,
+                providers: stringArray(value.providers, `pluginDistributions[${index}].providers`),
+                version: value.version
+            };
+        }),
+        project,
         version: metadata.version
     };
 }
@@ -28584,6 +28662,29 @@ async function findExecutable(name) {
     }
     throw new Error(`${name} is unavailable after setup`);
 }
+async function discoverProjectDirectory(workspace = process.env.GITHUB_WORKSPACE, cwd = process.cwd()) {
+    const candidates = workspace ? [workspace, cwd] : [cwd];
+    for (const candidate of new Set(candidates.map((item) => resolve(item)))) {
+        try {
+            const pyproject = await stat$1(join(candidate, 'pyproject.toml'));
+            if (pyproject.isFile())
+                return await realpath(candidate);
+        }
+        catch {
+            // Continue to the safe current-working-directory fallback.
+        }
+    }
+    return undefined;
+}
+function buildInstallArgs(requirement, pythonVersion, projectDirectory) {
+    const args = ['tool', 'install', '--managed-python', '--no-config'];
+    if (pythonVersion)
+        args.push('--python', pythonVersion);
+    if (projectDirectory)
+        args.push('--with', projectDirectory);
+    args.push(requirement);
+    return args;
+}
 async function writeLauncher(launcher, contents) {
     await mkdir$1(dirname(launcher), { recursive: true });
     await writeFile$1(launcher, contents, { encoding: 'utf8', mode: 0o755 });
@@ -28616,11 +28717,11 @@ async function run() {
             UV_TOOL_BIN_DIR: realBinDirectory,
             UV_TOOL_DIR: toolDirectory
         };
-        const installArgs = ['tool', 'install', '--managed-python', '--no-config'];
-        if (pythonVersion)
-            installArgs.push('--python', pythonVersion);
-        installArgs.push(requirement);
-        info(`Installing ${requirement} in an isolated environment`);
+        const projectDirectory = await discoverProjectDirectory();
+        const installArgs = buildInstallArgs(requirement, pythonVersion, projectDirectory);
+        info(projectDirectory
+            ? `Installing ${requirement} and the checked-out Python project in an isolated environment`
+            : `Installing ${requirement} in an isolated environment`);
         const installExitCode = await inheritProcess(uv, installArgs, uvEnvironment);
         if (installExitCode !== 0) {
             throw new Error(`uv failed to install ${requirement} (exit code ${installExitCode})`);
@@ -28630,7 +28731,10 @@ async function run() {
         const realAnvil = join(realBinDirectory, 'anvil');
         await access$1(python, constants$5.X_OK);
         await access$1(realAnvil, constants$5.X_OK);
-        const metadata = await readAnvilMetadata(python);
+        const metadata = await readAnvilMetadata(python, projectDirectory);
+        if (projectDirectory && !metadata.project) {
+            throw new Error('The checked-out Python project was not found in the Anvil environment after installation');
+        }
         const setupBundleDirectory = dirname(fileURLToPath(import.meta.url));
         const shimBundle = resolve(setupBundleDirectory, '..', 'shim', 'index.js');
         await access$1(shimBundle, constants$5.R_OK);
@@ -28643,6 +28747,9 @@ async function run() {
             `export SETUP_ANVIL_SHIM_DIRECTORY=${shellQuote(shimDirectory)}`,
             `export SETUP_ANVIL_UV=${shellQuote(uv)}`,
             `export SETUP_ANVIL_VERSION=${shellQuote(metadata.version)}`,
+            ...(projectDirectory
+                ? [`export SETUP_ANVIL_PROJECT=${shellQuote(projectDirectory)}`]
+                : []),
             `exec ${shellQuote(process.execPath)} ${shellQuote(shimBundle)} "$@"`,
             ''
         ].join('\n');

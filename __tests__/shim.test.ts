@@ -4,13 +4,23 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const readAnvilMetadata = jest.fn<
-  () => Promise<{
+  (
+    python: string,
+    project?: string
+  ) => Promise<{
     extras: string[]
-    providers: string[]
+    pluginDistributions: Array<{
+      extras: string[]
+      name: string
+      providers: string[]
+      version: string
+    }>
+    project?: { extras: string[]; name: string }
     version: string
   }>
 >()
-const inheritProcess = jest.fn<() => Promise<number>>()
+const inheritProcess =
+  jest.fn<(executable: string, args: readonly string[]) => Promise<number>>()
 
 jest.unstable_mockModule('../src/metadata.js', () => ({ readAnvilMetadata }))
 jest.unstable_mockModule('../src/process.js', () => ({ inheritProcess }))
@@ -39,7 +49,7 @@ describe('runShim', () => {
     await mkdir(process.env.SETUP_ANVIL_SHIM_DIRECTORY!, { recursive: true })
     readAnvilMetadata.mockResolvedValue({
       extras: ['azure', 'gcp', 'github'],
-      providers: ['aws', 'azure', 'gcp', 'github'],
+      pluginDistributions: [],
       version: '0.31.0'
     })
     inheritProcess.mockResolvedValue(0)
@@ -132,7 +142,7 @@ describe('runShim', () => {
     ])
   })
 
-  it('rejects an unsupported provider before executing Anvil', async () => {
+  it('forwards an unmatched provider to Anvil without guessing a package', async () => {
     await writeFile(
       join(directory, 'unknown.yaml'),
       'targets:\n  - provider:\n      name: unknown\n'
@@ -142,11 +152,176 @@ describe('runShim', () => {
     try {
       await expect(
         runShim(['run', '--config-file', 'unknown.yaml'])
-      ).rejects.toThrow('Provider "unknown" is not available in Anvil 0.31.0')
+      ).resolves.toBe(0)
     } finally {
       process.chdir(cwd)
     }
-    expect(inheritProcess).not.toHaveBeenCalled()
+    expect(inheritProcess).toHaveBeenCalledTimes(1)
+    expect(inheritProcess).toHaveBeenCalledWith(process.env.SETUP_ANVIL_REAL, [
+      'run',
+      '--config-file',
+      'unknown.yaml'
+    ])
+  })
+
+  it('treats a malicious-looking provider as data and never as a requirement', async () => {
+    const provider = 'bad] @ https://example.invalid/pkg; echo owned'
+    await writeFile(
+      join(directory, 'hostile.yaml'),
+      `targets:\n  - provider:\n      name: ${JSON.stringify(provider)}\n`
+    )
+    const args = ['validate', '--config-file', 'hostile.yaml']
+    const cwd = process.cwd()
+    process.chdir(directory)
+    try {
+      await expect(runShim(args)).resolves.toBe(0)
+    } finally {
+      process.chdir(cwd)
+    }
+
+    expect(inheritProcess).toHaveBeenCalledTimes(1)
+    expect(inheritProcess).toHaveBeenCalledWith(
+      process.env.SETUP_ANVIL_REAL,
+      args
+    )
+  })
+
+  it('installs only matching local extras from the absolute project path', async () => {
+    const projectPath = join(directory, 'renamed checkout')
+    process.env.SETUP_ANVIL_PROJECT = projectPath
+    readAnvilMetadata.mockResolvedValue({
+      extras: ['gcp'],
+      pluginDistributions: [],
+      project: {
+        extras: ['Snow_Flake', 'unrelated'],
+        name: 'completely-renamed-project'
+      },
+      version: '0.31.0'
+    })
+    await writeFile(
+      join(directory, 'snowflake.yaml'),
+      'targets:\n  - provider:\n      name: snow-flake\n'
+    )
+    const cwd = process.cwd()
+    process.chdir(directory)
+    try {
+      await expect(
+        runShim(['run', '--config-file', 'snowflake.yaml'])
+      ).resolves.toBe(0)
+    } finally {
+      process.chdir(cwd)
+    }
+
+    expect(inheritProcess).toHaveBeenNthCalledWith(1, 'uv', [
+      'pip',
+      'install',
+      '--python',
+      directory,
+      '--no-config',
+      'anvil==0.31.0',
+      `${projectPath}[Snow_Flake]`
+    ])
+  })
+
+  it('combines stock and local extras once and deduplicates providers', async () => {
+    const projectPath = join(directory, 'project')
+    process.env.SETUP_ANVIL_PROJECT = projectPath
+    readAnvilMetadata.mockResolvedValue({
+      extras: ['gcp'],
+      pluginDistributions: [],
+      project: { extras: ['snowflake', 'datadog'], name: 'consumer-package' },
+      version: '0.31.0'
+    })
+    await writeFile(
+      join(directory, 'one.yaml'),
+      'targets:\n  - provider:\n      name: snowflake\n  - provider:\n      name: gcp\n'
+    )
+    await writeFile(
+      join(directory, 'two.yaml'),
+      'targets:\n  - provider:\n      name: snowflake\n  - provider:\n      name: aws\n'
+    )
+    const args = ['run', '--config-file', 'one.yaml', 'two.yaml', 'one.yaml']
+    const cwd = process.cwd()
+    process.chdir(directory)
+    try {
+      await expect(runShim(args)).resolves.toBe(0)
+    } finally {
+      process.chdir(cwd)
+    }
+
+    expect(inheritProcess).toHaveBeenNthCalledWith(1, 'uv', [
+      'pip',
+      'install',
+      '--python',
+      directory,
+      '--no-config',
+      'anvil[gcp]==0.31.0',
+      `${projectPath}[snowflake]`
+    ])
+    expect(inheritProcess).toHaveBeenNthCalledWith(
+      2,
+      process.env.SETUP_ANVIL_REAL,
+      args
+    )
+  })
+
+  it('uses installed plugin distribution metadata without guessing names', async () => {
+    readAnvilMetadata.mockResolvedValue({
+      extras: [],
+      pluginDistributions: [
+        {
+          extras: ['warehouse'],
+          name: 'Company.Plugin',
+          providers: ['warehouse'],
+          version: '2.4.1'
+        }
+      ],
+      version: '0.31.0'
+    })
+    await writeFile(
+      join(directory, 'plugin.yaml'),
+      'targets:\n  - provider:\n      name: warehouse\n'
+    )
+    const cwd = process.cwd()
+    process.chdir(directory)
+    try {
+      await runShim(['validate', '--config-file', 'plugin.yaml'])
+    } finally {
+      process.chdir(cwd)
+    }
+
+    expect(inheritProcess).toHaveBeenNthCalledWith(1, 'uv', [
+      'pip',
+      'install',
+      '--python',
+      directory,
+      '--no-config',
+      'anvil==0.31.0',
+      'Company.Plugin[warehouse]==2.4.1'
+    ])
+  })
+
+  it('does not execute Anvil when dependency installation fails', async () => {
+    readAnvilMetadata.mockResolvedValue({
+      extras: ['gcp'],
+      pluginDistributions: [],
+      version: '0.31.0'
+    })
+    inheritProcess.mockResolvedValueOnce(17)
+    await writeFile(
+      join(directory, 'gcp.yaml'),
+      'targets:\n  - provider:\n      name: gcp\n'
+    )
+    const cwd = process.cwd()
+    process.chdir(directory)
+    try {
+      await expect(
+        runShim(['run', '--config-file', 'gcp.yaml'])
+      ).rejects.toThrow('uv failed to install provider dependencies for gcp')
+    } finally {
+      process.chdir(cwd)
+    }
+    expect(inheritProcess).toHaveBeenCalledTimes(1)
   })
 
   it('propagates the real Anvil exit code', async () => {

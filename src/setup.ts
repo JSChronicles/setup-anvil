@@ -53,6 +53,34 @@ async function findExecutable(name: string): Promise<string> {
   throw new Error(`${name} is unavailable after setup`)
 }
 
+export async function discoverProjectDirectory(
+  workspace = process.env.GITHUB_WORKSPACE,
+  cwd = process.cwd()
+): Promise<string | undefined> {
+  const candidates = workspace ? [workspace, cwd] : [cwd]
+  for (const candidate of new Set(candidates.map((item) => resolve(item)))) {
+    try {
+      const pyproject = await stat(join(candidate, 'pyproject.toml'))
+      if (pyproject.isFile()) return await realpath(candidate)
+    } catch {
+      // Continue to the safe current-working-directory fallback.
+    }
+  }
+  return undefined
+}
+
+export function buildInstallArgs(
+  requirement: string,
+  pythonVersion: string,
+  projectDirectory?: string
+): string[] {
+  const args = ['tool', 'install', '--managed-python', '--no-config']
+  if (pythonVersion) args.push('--python', pythonVersion)
+  if (projectDirectory) args.push('--with', projectDirectory)
+  args.push(requirement)
+  return args
+}
+
 export async function writeLauncher(
   launcher: string,
   contents: string
@@ -99,11 +127,18 @@ export async function run(): Promise<void> {
       UV_TOOL_BIN_DIR: realBinDirectory,
       UV_TOOL_DIR: toolDirectory
     }
-    const installArgs = ['tool', 'install', '--managed-python', '--no-config']
-    if (pythonVersion) installArgs.push('--python', pythonVersion)
-    installArgs.push(requirement)
+    const projectDirectory = await discoverProjectDirectory()
+    const installArgs = buildInstallArgs(
+      requirement,
+      pythonVersion,
+      projectDirectory
+    )
 
-    core.info(`Installing ${requirement} in an isolated environment`)
+    core.info(
+      projectDirectory
+        ? `Installing ${requirement} and the checked-out Python project in an isolated environment`
+        : `Installing ${requirement} in an isolated environment`
+    )
     const installExitCode = await inheritProcess(uv, installArgs, uvEnvironment)
     if (installExitCode !== 0) {
       throw new Error(
@@ -116,7 +151,12 @@ export async function run(): Promise<void> {
     const realAnvil = join(realBinDirectory, 'anvil')
     await access(python, constants.X_OK)
     await access(realAnvil, constants.X_OK)
-    const metadata = await readAnvilMetadata(python)
+    const metadata = await readAnvilMetadata(python, projectDirectory)
+    if (projectDirectory && !metadata.project) {
+      throw new Error(
+        'The checked-out Python project was not found in the Anvil environment after installation'
+      )
+    }
 
     const setupBundleDirectory = dirname(fileURLToPath(import.meta.url))
     const shimBundle = resolve(setupBundleDirectory, '..', 'shim', 'index.js')
@@ -130,6 +170,9 @@ export async function run(): Promise<void> {
       `export SETUP_ANVIL_SHIM_DIRECTORY=${shellQuote(shimDirectory)}`,
       `export SETUP_ANVIL_UV=${shellQuote(uv)}`,
       `export SETUP_ANVIL_VERSION=${shellQuote(metadata.version)}`,
+      ...(projectDirectory
+        ? [`export SETUP_ANVIL_PROJECT=${shellQuote(projectDirectory)}`]
+        : []),
       `exec ${shellQuote(process.execPath)} ${shellQuote(shimBundle)} "$@"`,
       ''
     ].join('\n')

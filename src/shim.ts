@@ -8,6 +8,20 @@ import { inheritProcess } from './process.js'
 const LOCK_TIMEOUT_MS = 30_000
 const STALE_LOCK_MS = 5 * 60_000
 
+function normalizePackageName(value: string): string {
+  return value.toLowerCase().replaceAll(/[-_.]+/g, '-')
+}
+
+function matchingExtra(
+  extras: readonly string[],
+  provider: string
+): string | undefined {
+  const normalizedProvider = normalizePackageName(provider)
+  return extras.find(
+    (extra) => normalizePackageName(extra) === normalizedProvider
+  )
+}
+
 function requiredEnvironment(name: string): string {
   const value = process.env[name]
   if (!value)
@@ -85,27 +99,73 @@ export async function runShim(
   const configFiles = extractConfigFiles(originalArgs)
   if (configFiles.length > 0) {
     const requestedProviders = await discoverProviders(configFiles)
-    const metadata = await readAnvilMetadata(python)
+    const projectPath = process.env.SETUP_ANVIL_PROJECT
+    const metadata = await readAnvilMetadata(python, projectPath)
     if (metadata.version !== expectedVersion) {
       throw new Error(
         `Installed Anvil version changed unexpectedly: expected ${expectedVersion}, found ${metadata.version}`
       )
     }
 
-    const knownProviders = new Set(metadata.providers)
-    const availableExtras = new Set(metadata.extras)
-    const requiredExtras: string[] = []
-    for (const provider of requestedProviders) {
-      if (!knownProviders.has(provider)) {
-        throw new Error(
-          `Provider "${provider}" is not available in Anvil ${metadata.version}`
-        )
-      }
-      if (availableExtras.has(provider)) requiredExtras.push(provider)
+    if (projectPath && !metadata.project) {
+      throw new Error(
+        'The checked-out Python project is missing from the Anvil environment'
+      )
     }
 
-    if (requiredExtras.length > 0) {
-      const requirement = `anvil[${requiredExtras.join(',')}]==${metadata.version}`
+    const anvilExtras: string[] = []
+    const projectExtras: string[] = []
+    const pluginExtras = new Map<string, string[]>()
+    for (const provider of requestedProviders) {
+      const anvilExtra = matchingExtra(metadata.extras, provider)
+      if (anvilExtra && !anvilExtras.includes(anvilExtra)) {
+        anvilExtras.push(anvilExtra)
+      }
+      const projectExtra = metadata.project
+        ? matchingExtra(metadata.project.extras, provider)
+        : undefined
+      if (projectExtra && !projectExtras.includes(projectExtra)) {
+        projectExtras.push(projectExtra)
+      }
+      for (const plugin of metadata.pluginDistributions) {
+        if (
+          !plugin.providers.some(
+            (name) =>
+              normalizePackageName(name) === normalizePackageName(provider)
+          )
+        ) {
+          continue
+        }
+        const pluginExtra = matchingExtra(plugin.extras, provider)
+        if (!pluginExtra) continue
+        const key = `${plugin.name}==${plugin.version}`
+        const extras = pluginExtras.get(key) ?? []
+        if (!extras.includes(pluginExtra)) extras.push(pluginExtra)
+        pluginExtras.set(key, extras)
+      }
+    }
+
+    const requirements: string[] = []
+    if (projectPath && projectExtras.length > 0) {
+      requirements.push(`${projectPath}[${projectExtras.join(',')}]`)
+    }
+    for (const [plugin, extras] of pluginExtras) {
+      requirements.push(
+        `${plugin.slice(0, plugin.lastIndexOf('=='))}[${extras.join(',')}]${plugin.slice(plugin.lastIndexOf('=='))}`
+      )
+    }
+
+    if (requirements.length > 0) {
+      requirements.unshift(
+        anvilExtras.length > 0
+          ? `anvil[${anvilExtras.join(',')}]==${metadata.version}`
+          : `anvil==${metadata.version}`
+      )
+    } else if (anvilExtras.length > 0) {
+      requirements.push(`anvil[${anvilExtras.join(',')}]==${metadata.version}`)
+    }
+
+    if (requirements.length > 0) {
       await withInstallLock(environment, async () => {
         const exitCode = await inheritProcess(uv, [
           'pip',
@@ -113,11 +173,11 @@ export async function runShim(
           '--python',
           environment,
           '--no-config',
-          requirement
+          ...requirements
         ])
         if (exitCode !== 0) {
           throw new Error(
-            `uv failed to install provider dependencies for ${requiredExtras.join(', ')}`
+            `uv failed to install provider dependencies for ${requestedProviders.join(', ')}`
           )
         }
       })

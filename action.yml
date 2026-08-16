@@ -1,6 +1,7 @@
 name: Setup Anvil
 description:
-  Set up Anvil and install provider dependencies from its config files
+  Set up Anvil with checked-out project plugins and selected provider
+  dependencies
 author: JSChronicles
 
 branding:
