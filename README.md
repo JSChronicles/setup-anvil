@@ -50,23 +50,17 @@ or provider installation.
 
 ## Version selection
 
-The default action release installs an exact, integration-tested Anvil version.
-Choose another exact version with `anvil-version`:
+By default, the action installs the latest stable Anvil release from PyPI.
+Choose an exact version for reproducible workflow runs:
 
 ```yaml
 - uses: JSChronicles/setup-anvil@v0
   with:
-    anvil-version: '0.31.0'
+    anvil-version: '0.33.4'
 ```
 
-Use `latest` only when intentionally opting into a version that can change
-between otherwise identical workflow runs:
-
-```yaml
-- uses: JSChronicles/setup-anvil@v0
-  with:
-    anvil-version: latest
-```
+Set `anvil-version: latest` explicitly to document the default behavior. The
+resolved version can change between otherwise identical workflow runs.
 
 The selected version is available as the `anvil-version` action output.
 
@@ -76,7 +70,7 @@ optional override is available for older Anvil releases or unusual runners:
 ```yaml
 - uses: JSChronicles/setup-anvil@v0
   with:
-    anvil-version: '0.31.0'
+    anvil-version: '0.33.4'
     python-version: '3.14'
 ```
 
@@ -107,7 +101,7 @@ name = "acme-security-anvil"
 version = "1.0.0"
 requires-python = ">=3.12"
 dependencies = [
-  "anvil==0.31.0",
+  "anvil==0.33.4",
 ]
 
 [project.optional-dependencies]
@@ -151,7 +145,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: JSChronicles/setup-anvil@v0
         with:
-          anvil-version: '0.31.0'
+          anvil-version: '0.33.4'
       - run: anvil validate --config-file anvil.yaml
       - run: anvil run --config-file anvil.yaml
 ```
@@ -190,7 +184,7 @@ authoritative for discovery and validation.
 
 For stock components, a stock provider with a same-named Anvil extra activates
 that extra, such as `anvil[gcp]`. Providers included in base Anvil, such as AWS
-in Anvil 0.31.0, require no additional operation.
+in Anvil 0.33.4, require no additional operation.
 
 For plugin providers, a provider name activates an extra only when the same
 normalized extra name is explicitly advertised by the checked-out project or an
