@@ -7,27 +7,30 @@ if (!version || !exactVersion.test(version)) {
   throw new Error('usage: node scripts/update-anvil-version.mjs <x.y.z>')
 }
 
-const actionPath = 'action.yml'
-const action = await readFile(actionPath, 'utf8')
-const defaultPattern = /(    default: ')(\d+\.\d+\.\d+)(')/
-const match = action.match(defaultPattern)
+const compatibilityPath = '.github/anvil-compatibility.json'
+const compatibility = JSON.parse(await readFile(compatibilityPath, 'utf8'))
+const previousVersion = compatibility.anvil_version
 
-if (!match) {
-  throw new Error('could not find the default Anvil version in action.yml')
+if (!exactVersion.test(previousVersion || '')) {
+  throw new Error(
+    `${compatibilityPath} does not contain a stable Anvil version`
+  )
 }
 
-const previousVersion = match[2]
-const updatedAction = action.replace(defaultPattern, `$1${version}$3`)
-await writeFile(actionPath, updatedAction)
+compatibility.anvil_version = version
+await writeFile(
+  compatibilityPath,
+  `${JSON.stringify(compatibility, null, 2)}\n`,
+  'utf8'
+)
 
-for (const path of ['README.md', '.github/workflows/ci.yml']) {
-  const contents = await readFile(path, 'utf8')
-  if (!contents.includes(previousVersion)) {
-    throw new Error(`${path} does not contain Anvil ${previousVersion}`)
-  }
-  await writeFile(path, contents.replaceAll(previousVersion, version))
+const readmePath = 'README.md'
+const readme = await readFile(readmePath, 'utf8')
+if (!readme.includes(previousVersion)) {
+  throw new Error(`${readmePath} does not contain Anvil ${previousVersion}`)
 }
+await writeFile(readmePath, readme.replaceAll(previousVersion, version))
 
 console.log(
-  `Updated the default Anvil version from ${previousVersion} to ${version}`
+  `Updated the tested Anvil version from ${previousVersion} to ${version}`
 )

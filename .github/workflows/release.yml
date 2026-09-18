@@ -173,15 +173,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          anvil_version=$(node --input-type=module - <<'NODE'
-          import { readFile } from 'node:fs/promises'
-
-          const action = await readFile('action.yml', 'utf8')
-          const match = action.match(/    default: '(\d+\.\d+\.\d+)'/)
-          if (!match) throw new Error('could not read the default Anvil version')
-          console.log(match[1])
-          NODE
-          )
+          anvil_version=$(jq --raw-output '.anvil_version' .github/anvil-compatibility.json)
+          if ! [[ "$anvil_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::compatibility metadata does not contain a stable Anvil version"
+            exit 1
+          fi
 
           jq --null-input \
             --arg anvil_version "$anvil_version" \
