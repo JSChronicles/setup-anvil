@@ -150,3 +150,49 @@ jobs:
               -F force=true >/dev/null
             echo "Updated $floating_tag to $target_sha."
           fi
+
+      - name: Create template dispatch token
+        if: steps.release.outputs.released == 'true'
+        id: template-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.DOWNSTREAM_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.DOWNSTREAM_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: foundry-anvil-template
+          permission-contents: write
+
+      - name: Request template update
+        if: steps.release.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ steps.template-token.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+          SETUP_SHA: ${{ github.sha }}
+          SETUP_TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          anvil_version=$(jq --raw-output '.anvil_version' .github/anvil-compatibility.json)
+          if ! [[ "$anvil_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::compatibility metadata does not contain a stable Anvil version"
+            exit 1
+          fi
+
+          jq --null-input \
+            --arg anvil_version "$anvil_version" \
+            --arg setup_sha "$SETUP_SHA" \
+            --arg setup_tag "$SETUP_TAG" \
+            '{
+              event_type: "setup_anvil_released",
+              client_payload: {
+                anvil_version: $anvil_version,
+                setup_sha: $setup_sha,
+                setup_tag: $setup_tag
+              }
+            }' > "$RUNNER_TEMP/setup-anvil-release.json"
+
+          gh api \
+            --method POST \
+            "repos/${OWNER}/foundry-anvil-template/dispatches" \
+            --input "$RUNNER_TEMP/setup-anvil-release.json"

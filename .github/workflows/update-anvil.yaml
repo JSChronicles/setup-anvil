@@ -1,0 +1,190 @@
+name: Update Anvil
+
+on:
+  repository_dispatch:
+    types:
+      - anvil_released
+  workflow_dispatch:
+    inputs:
+      image_digest:
+        description: Published multi-platform GHCR image digest
+        required: true
+        type: string
+      release_sha:
+        description: Full commit SHA for the Anvil release
+        required: true
+        type: string
+      tag:
+        description: Anvil release tag, such as v0.34.0
+        required: true
+        type: string
+      version:
+        description: Anvil version without the v prefix
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-anvil
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read release metadata
+        id: release
+        env:
+          DISPATCH_DIGEST: ${{ github.event.client_payload.image_digest }}
+          DISPATCH_SHA: ${{ github.event.client_payload.release_sha }}
+          DISPATCH_TAG: ${{ github.event.client_payload.tag }}
+          DISPATCH_VERSION: ${{ github.event.client_payload.version }}
+          INPUT_DIGEST: ${{ inputs.image_digest }}
+          INPUT_SHA: ${{ inputs.release_sha }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          digest="${DISPATCH_DIGEST:-$INPUT_DIGEST}"
+          sha="${DISPATCH_SHA:-$INPUT_SHA}"
+          tag="${DISPATCH_TAG:-$INPUT_TAG}"
+          version="${DISPATCH_VERSION:-$INPUT_VERSION}"
+
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Anvil version '$version' is not a stable semantic version"
+            exit 1
+          fi
+          if [[ "$tag" != "v${version}" ]]; then
+            echo "::error::Anvil tag '$tag' does not match version '$version'"
+            exit 1
+          fi
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Anvil release SHA is not a full commit SHA"
+            exit 1
+          fi
+          if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Anvil image digest is not a sha256 digest"
+            exit 1
+          fi
+
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Create pull request token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.DOWNSTREAM_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.DOWNSTREAM_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: setup-anvil
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Update version references
+        env:
+          ANVIL_VERSION: ${{ steps.release.outputs.version }}
+        run: node scripts/update-anvil-version.mjs "$ANVIL_VERSION"
+
+      - name: Validate source and bundles
+        run: |
+          npm run format:check
+          npm run lint
+          npm run typecheck
+          npm run ci-test
+          npm run build
+          git diff --exit-code -- dist/
+
+      - name: Smoke test the released version
+        id: setup-anvil
+        uses: ./
+        with:
+          anvil-version: ${{ steps.release.outputs.version }}
+
+      - name: Verify installed version
+        env:
+          ACTUAL_VERSION: ${{ steps.setup-anvil.outputs.anvil-version }}
+          EXPECTED_VERSION: ${{ steps.release.outputs.version }}
+        shell: bash
+        run: |
+          test "$ACTUAL_VERSION" = "$EXPECTED_VERSION"
+          anvil --version
+          anvil validate --tasks --processors --providers --quiet
+
+      - name: Create or update pull request
+        env:
+          ANVIL_DIGEST: ${{ steps.release.outputs.digest }}
+          ANVIL_SHA: ${{ steps.release.outputs.sha }}
+          ANVIL_TAG: ${{ steps.release.outputs.tag }}
+          ANVIL_VERSION: ${{ steps.release.outputs.version }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          branch="automation/update-anvil"
+          git config user.name "${{ steps.app-token.outputs.app-slug }}[bot]"
+          git config user.email "${{ steps.app-token.outputs.app-slug }}[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add README.md .github/anvil-compatibility.json
+
+          if git diff --cached --quiet; then
+            echo "setup-anvil already records compatibility with Anvil ${ANVIL_VERSION}."
+            exit 0
+          fi
+
+          git commit -m "fix(deps): update default Anvil to ${ANVIL_VERSION}"
+          git push --force origin "HEAD:refs/heads/${branch}"
+
+          body=$(cat <<EOF
+          Records compatibility with Anvil ${ANVIL_TAG} while retaining the action's
+          \`latest\` default.
+
+          - Anvil release commit: \`${ANVIL_SHA}\`
+          - Published image: \`ghcr.io/jschronicles/anvil@${ANVIL_DIGEST}\`
+          - Updates the tested-version metadata and exact-version documentation
+          - Runs the complete action checks and an exact-version smoke test
+
+          This pull request was generated after both PyPI and GHCR publishing succeeded.
+          EOF
+          )
+
+          number=$(gh pr list \
+            --head "$branch" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')
+          if [[ -n "$number" ]]; then
+            gh pr edit "$number" \
+              --title "fix(deps): update default Anvil to ${ANVIL_VERSION}" \
+              --body "$body"
+          else
+            gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "fix(deps): update default Anvil to ${ANVIL_VERSION}" \
+              --body "$body" \
+              --label dependencies
+          fi

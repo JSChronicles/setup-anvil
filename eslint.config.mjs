@@ -78,5 +78,13 @@ export default [
       'no-unused-vars': 'off',
       'prettier/prettier': 'error'
     }
+  },
+  {
+    files: ['scripts/*.mjs'],
+    languageOptions: {
+      parserOptions: {
+        projectService: false
+      }
+    }
   }
 ]
