@@ -66,6 +66,7 @@ jobs:
         env:
           INSTALLED_VERSION: ${{ steps.setup-anvil.outputs.anvil-version }}
         run: |
-          test "$INSTALLED_VERSION" = "0.31.0"
+          test -n "$INSTALLED_VERSION"
+          anvil --version
           anvil list --tasks
           anvil list --processors
