@@ -5,7 +5,7 @@ Actions. The checked-out Python project is installed alongside Anvil, so its
 plugin providers, plugin tasks, and plugin processors work through Anvil's
 normal entry-point discovery. When an Anvil command includes configuration
 files, this action installs only the advertised optional dependencies matching
-the selected providers before running the real CLI.
+the selected providers before running the CLI.
 
 The workflow continues to use normal Anvil commands. There are no action inputs
 for commands, arguments, config files, or providers.
@@ -124,7 +124,7 @@ acme = "acme_security_anvil.providers"
 
 With a configuration containing `targets[*].provider.name: snowflake`, the shim
 activates the local `snowflake` extra using the checkout's absolute path. That
-installs `company-anvil-snowflake==2.4.1`; the real Anvil process then discovers
+installs `company-anvil-snowflake==2.4.1`; the Anvil process then discovers
 its provider through `anvil.provider_packages`.
 
 A complete workflow checks out the package before setup and invokes Anvil as
@@ -156,7 +156,7 @@ behavior.
 ## How provider setup works
 
 The action installs Anvil into a private uv-managed environment. It places a
-small `anvil` shim first on `PATH` while keeping the real executable at a known
+small `anvil` shim first on `PATH` while keeping the executable at a known
 private path.
 
 For an invocation containing `--config-file`, the shim:
@@ -169,7 +169,7 @@ For an invocation containing `--config-file`, the shim:
    applicable installed plugin distributions/packages;
 6. asks uv to ensure all matching extras in one serialized operation while
    preserving Anvil's exact selected version; and
-7. invokes the real Anvil executable with the untouched original arguments.
+7. invokes the Anvil executable with the untouched original arguments.
 
 uv compares the combined requirement with the actual environment, so repeated
 commands do not require a separate provider-state file. Concurrent installation
@@ -222,7 +222,7 @@ is available on GitHub.com but not on GitHub Enterprise Server.
   metadata, and use the checkout's absolute path.
 - Plugin distributions/packages and entry points are inspected as metadata;
   plugin implementations are not imported or executed during setup discovery.
-- The real Anvil executable is invoked by absolute path, preventing shim
+- The Anvil executable is invoked by absolute path, preventing shim
   recursion.
 - The action itself needs no GitHub token. Start with `contents: read` and add
   only permissions required by provider authentication, such as
