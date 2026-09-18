@@ -51,8 +51,7 @@ export default [
             '__tests__/*.ts',
             'eslint.config.mjs',
             'jest.config.js',
-            'rollup.config.ts',
-            'scripts/*.mjs'
+            'rollup.config.ts'
           ]
         },
         tsconfigRootDir: import.meta.dirname
@@ -78,6 +77,14 @@ export default [
       'no-shadow': 'off',
       'no-unused-vars': 'off',
       'prettier/prettier': 'error'
+    }
+  },
+  {
+    files: ['scripts/*.mjs'],
+    languageOptions: {
+      parserOptions: {
+        projectService: false
+      }
     }
   }
 ]
