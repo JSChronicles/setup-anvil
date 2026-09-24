@@ -181,10 +181,16 @@ jobs:
               --title "fix(deps): update default Anvil to ${ANVIL_VERSION}" \
               --body "$body"
           else
-            gh pr create \
+            url=$(gh pr create \
               --base main \
               --head "$branch" \
               --title "fix(deps): update default Anvil to ${ANVIL_VERSION}" \
               --body "$body" \
-              --label dependencies
+              --label dependencies)
+            number=${url##*/}
           fi
+
+          gh pr merge "$number" \
+            --auto \
+            --merge \
+            --delete-branch
