@@ -131,7 +131,11 @@ jobs:
         run: |
           test "$ACTUAL_VERSION" = "$EXPECTED_VERSION"
           anvil --version
-          anvil validate --tasks --processors --providers --quiet
+
+          uvx --from "anvil[aws]==$EXPECTED_VERSION" anvil validate \
+            --tasks \
+            --processors \
+            --providers
 
       - name: Create or update pull request
         env:
